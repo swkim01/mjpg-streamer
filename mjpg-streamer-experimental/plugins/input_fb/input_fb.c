@@ -6,6 +6,7 @@
 # Copyright (C) 2005 2006 Laurent Pinchart &&  Michel Xhaard                   #
 #                    2007 Lucas van Staden                                     #
 #                    2007 Tom Stöveken                                         #
+#                    2016 Seong-Woo Kim                                        #
 #                                                                              #
 # This program is free software; you can redistribute it and/or modify         #
 # it under the terms of the GNU General Public License as published by         #
@@ -42,7 +43,6 @@
 #include <bcm_host.h>
 
 #include "../../utils.h"
-//#include "../../mjpg_streamer.h"
 #include "rpifb.h"
 #include "huffman.h"
 #include "jpeg_utils.h"
@@ -65,7 +65,9 @@ static const struct {
     { "VGA",  640,  480  },
     { "SVGA", 800,  600  },
     { "XGA",  1024, 768  },
-    { "SXGA", 1280, 1024 }
+    { "SXGA", 1280, 1024 },
+    { "UXGA", 1600, 1200 },
+    { "WUXGA", 1920, 1200 }
 };
 
 /* private functions and variables to this plugin */
