@@ -1,4 +1,4 @@
-mjpg-streamer input plugin: input_rpifb
+mjpg-streamer input plugin: input_fb
 ==========================================
 
 MJPEG Streamer with rasberry pi framebuffer input plugin (based on mmal source code)   
