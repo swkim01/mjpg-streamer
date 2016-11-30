@@ -26,8 +26,9 @@
 #include <stdio.h>
 #include <jpeglib.h>
 #include <stdlib.h>
+#include <stdint.h>
 
-#include "rpifb.h"
+#include "input_fb.h"
 
 #define OUTPUT_BUF_SIZE  4096
 
@@ -123,86 +124,6 @@ GLOBAL(void) dest_buffer(j_compress_ptr cinfo, unsigned char *buffer, int size, 
     dest->written = written;
 }
 
-/******************************************************************************
-Description.: yuv2jpeg function is based on compress_yuyv_to_jpeg written by
-              Gabriel A. Devenyi.
-              It uses the destination manager implemented above to compress
-              YUYV data to JPEG. Most other implementations use the
-              "jpeg_stdio_dest" from libjpeg, which can not store compressed
-              pictures to memory instead of a file.
-Input Value.: video structure from v4l2uvc.c/h, destination buffer and buffersize
-              the buffer must be large enough, no error/size checking is done!
-Return Value: the buffer will contain the compressed data
-******************************************************************************/
-int compress_yuyv_to_jpeg(struct vdIn *vd, unsigned char *buffer, int size, int quality)
-{
-    struct jpeg_compress_struct cinfo;
-    struct jpeg_error_mgr jerr;
-    JSAMPROW row_pointer[1];
-    unsigned char *line_buffer, *yuyv;
-    int z;
-    static int written;
-
-    line_buffer = calloc(vd->width * 3, 1);
-    yuyv = vd->framebuffer;
-
-    cinfo.err = jpeg_std_error(&jerr);
-    jpeg_create_compress(&cinfo);
-    /* jpeg_stdio_dest (&cinfo, file); */
-    dest_buffer(&cinfo, buffer, size, &written);
-
-    cinfo.image_width = vd->width;
-    cinfo.image_height = vd->height;
-    cinfo.input_components = 3;
-    cinfo.in_color_space = JCS_RGB;
-
-    jpeg_set_defaults(&cinfo);
-    jpeg_set_quality(&cinfo, quality, TRUE);
-
-    jpeg_start_compress(&cinfo, TRUE);
-
-    z = 0;
-    while(cinfo.next_scanline < vd->height) {
-        int x;
-        unsigned char *ptr = line_buffer;
-
-        for(x = 0; x < vd->width; x++) {
-            int r, g, b;
-            int y, u, v;
-
-            if(!z)
-                y = yuyv[0] << 8;
-            else
-                y = yuyv[2] << 8;
-            u = yuyv[1] - 128;
-            v = yuyv[3] - 128;
-
-            r = (y + (359 * v)) >> 8;
-            g = (y - (88 * u) - (183 * v)) >> 8;
-            b = (y + (454 * u)) >> 8;
-
-            *(ptr++) = (r > 255) ? 255 : ((r < 0) ? 0 : r);
-            *(ptr++) = (g > 255) ? 255 : ((g < 0) ? 0 : g);
-            *(ptr++) = (b > 255) ? 255 : ((b < 0) ? 0 : b);
-
-            if(z++) {
-                z = 0;
-                yuyv += 4;
-            }
-        }
-
-        row_pointer[0] = line_buffer;
-        jpeg_write_scanlines(&cinfo, row_pointer, 1);
-    }
-
-    jpeg_finish_compress(&cinfo);
-    jpeg_destroy_compress(&cinfo);
-
-    free(line_buffer);
-
-    return (written);
-}
-
 int compress_yuv420_to_jpeg(struct vdIn *vd, unsigned char *buffer, int size, int quality)
 {
     struct jpeg_compress_struct cinfo;
@@ -261,20 +182,21 @@ int compress_rgb888_to_jpeg(struct vdIn *vd, unsigned char *buffer, int size, in
     struct jpeg_compress_struct cinfo;
     struct jpeg_error_mgr jerr;
     JSAMPROW row_pointer[1];
-    unsigned char *line_buffer, *rgb;
-    int z;
+    unsigned char *rgb;
+    int width, height, z;
     static int written;
 
-    line_buffer = calloc(vd->width * 3, 1);
+    width = vd->width;
+    height = vd->height;
     rgb = vd->framebuffer;
-
+    //printf("bbb\n");
     cinfo.err = jpeg_std_error(&jerr);
     jpeg_create_compress(&cinfo);
     /* jpeg_stdio_dest (&cinfo, file); */
     dest_buffer(&cinfo, buffer, size, &written);
 
-    cinfo.image_width = vd->width;
-    cinfo.image_height = vd->height;
+    cinfo.image_width = width;
+    cinfo.image_height = height;
     cinfo.input_components = 3;
     cinfo.in_color_space = JCS_RGB;
 
@@ -284,7 +206,7 @@ int compress_rgb888_to_jpeg(struct vdIn *vd, unsigned char *buffer, int size, in
     jpeg_start_compress(&cinfo, TRUE);
 
     z = 0;
-    while(cinfo.next_scanline < vd->height) {
+    while(cinfo.next_scanline < height) {
         /*int x;
         unsigned char *ptr = line_buffer;
 
@@ -295,14 +217,12 @@ int compress_rgb888_to_jpeg(struct vdIn *vd, unsigned char *buffer, int size, in
         }
         row_pointer[0] = line_buffer;
         */
-        row_pointer[0] = rgb + vd->width * z * 3;
+        row_pointer[0] = rgb + width * z * 3;
         jpeg_write_scanlines(&cinfo, row_pointer, 1);
         z++;
     }
     jpeg_finish_compress(&cinfo);
     jpeg_destroy_compress(&cinfo);
-
-    free(line_buffer);
 
     return (written);
 }

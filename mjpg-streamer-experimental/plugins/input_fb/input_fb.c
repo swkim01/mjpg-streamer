@@ -1,7 +1,7 @@
 /*******************************************************************************
 # RaspberryPi-Framebuffer streaming input-plugin for MJPG-streamer             #
 #                                                                              #
-# This package work with the RaspberryPi fb with the mjpeg feature             #
+# This package work with the linux(inc. RaspberryPi) fb with the mjpeg feature #
 #                                                                              #
 # Copyright (C) 2005 2006 Laurent Pinchart &&  Michel Xhaard                   #
 #                    2007 Lucas van Staden                                     #
@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <errno.h>
@@ -40,14 +41,27 @@
 #include <linux/fb.h>
 #include <sys/mman.h>
 
+#ifdef RASPI
 #include <bcm_host.h>
+#else
+#ifdef X11
+#include <X11/Xlib.h>
+#include <X11/X.h>
+#endif
+#endif
 
 #include "../../utils.h"
-#include "rpifb.h"
+#include "input_fb.h"
 #include "huffman.h"
 #include "jpeg_utils.h"
 
-#define INPUT_PLUGIN_NAME "RaspberryPi Framebuffer grabber"
+#define INPUT_PLUGIN_NAME "Framebuffer grabber"
+
+#ifdef RASPI
+static uint8_t effective_bytes_per_pixel;
+static uint64_t fbsize;
+static uint8_t *fbbuf;
+#endif
 
 /*
  * UVC resolutions mentioned at: (at least for some webcams)
@@ -80,6 +94,57 @@ void fb_cleanup(void *);
 void help(void);
 int input_cmd(int plugin, unsigned int control, unsigned int group, int value);
 
+struct fb_bitop_element {
+	uint64_t mask;
+	int8_t shift;
+	uint8_t depth;
+};
+
+struct fb_bitop {
+	struct fb_bitop_element red, green, blue, alpha;
+};
+
+static struct fb_bitop bp;
+
+uint64_t fill_bits(uint8_t n)
+{
+	int i;
+	uint64_t u;
+
+	for (i=0, u=0; i<n; i++) {
+		u<<=1;
+		u|=(uint64_t)1;
+	}
+	return u;
+}
+
+int init_jpeg(struct vdIn *vd)
+{
+    struct fb_var_screeninfo *sc = &vd->display_info;
+    
+    for(bp.red.depth=sc->red.length; bp.red.depth>8; bp.red.depth--)
+        ;
+    for(bp.green.depth=sc->green.length; bp.green.depth>8; bp.green.depth--)
+        ;
+    for(bp.blue.depth=sc->blue.length; bp.blue.depth>8; bp.blue.depth--)
+        ;
+    if (sc->transp.length!=0)
+        for(bp.alpha.depth=sc->transp.length; bp.alpha.depth>8; bp.alpha.depth--)
+            ;
+
+    bp.red.mask=fill_bits(sc->red.length)<<sc->red.offset;
+    bp.red.shift=sc->red.offset+(sc->red.length-bp.red.depth)-(8-bp.red.depth);
+    bp.green.mask=fill_bits(sc->green.length)<<sc->green.offset;
+    bp.green.shift=sc->green.offset+(sc->green.length-bp.green.depth)-(8-bp.green.depth);
+    bp.blue.mask=fill_bits(sc->blue.length)<<sc->blue.offset;
+    bp.blue.shift=sc->blue.offset+(sc->blue.length-bp.blue.depth)-(8-bp.blue.depth);
+    if (sc->transp.length!=0) {
+        bp.alpha.mask=fill_bits(sc->transp.length)<<sc->transp.offset;
+        bp.alpha.shift=sc->transp.offset+(sc->transp.length-bp.alpha.depth)-(8-bp.alpha.depth);
+    }
+    //printf("redmask=%x, redshift=%d, greenmask=%x, greenshift=%d, bluemask=%x, blueshift=%d\n", bp.red.mask, bp.red.shift, bp.green.mask, bp.green.shift, bp.blue.mask, bp.blue.shift);
+
+}
 
 /*** plugin interface functions ***/
 /******************************************************************************
@@ -94,7 +159,19 @@ Return Value: 0 if everything is fine
 int input_init(input_parameter *param, int id)
 {
     char *s;
-    int width = 640, height = 480, fps = 30, format = VC_IMAGE_RGB888, i;
+    int width = 640, height = 480, fps = 30, i;
+    char *device_file;
+#ifdef RASPI
+    int format = VC_IMAGE_RGB888;
+    device_t device = DEVICE_RASPI;
+#else
+#ifdef X11
+    device_t device = DEVICE_XWINDOW;
+#else
+    device_t device = DEVICE_FB;
+#endif
+    int format = 3; /* RGB=3bytes*/
+#endif
     int ret;
     struct vdIn *vd;
 
@@ -128,6 +205,8 @@ int input_init(input_parameter *param, int id)
             {"quality", required_argument, 0, 0},
             {"m", required_argument, 0, 0},
             {"minimum_size", required_argument, 0, 0},
+            {"x", no_argument, 0, 0},
+            {"d", required_argument, 0, 0},
             {"n", no_argument, 0, 0},
             {0, 0, 0, 0}
         };
@@ -204,6 +283,19 @@ int input_init(input_parameter *param, int id)
             DBG("case 10,11\n");
             minimum_size = MAX(atoi(optarg), 0);
             break;
+#ifdef X11
+            /* x */
+        case 12:
+            DBG("case 12\n");
+            device = DEVICE_XWINDOW;
+            break;
+#endif
+            /* d */
+        case 13:
+            DBG("case 13\n");
+            device = DEVICE_FB;
+            device_file = strdup(optarg);
+            break;
 
         default:
             DBG("default case\n");
@@ -224,66 +316,117 @@ int input_init(input_parameter *param, int id)
     memset(fbs[id].videoIn, 0, sizeof(struct vdIn));
 
     /* display the parsed values */
-    IPRINT("Using RaspberryPi Framebuffer device.:\n");
+    IPRINT("Using Framebuffer device.:\n");
     IPRINT("Desired Resolution: %i x %i\n", width, height);
     IPRINT("Frames Per Second.: %i\n", fps);
+#ifdef RASPI
     IPRINT("Format............: %s\n", (format == VC_IMAGE_YUV420) ? "YUV" : "RGB");
+#else
+    IPRINT("Format............: %s\n", "RGB");
+#endif
     IPRINT("JPEG Quality......: %d\n", gquality);
 
     DBG("vdIn pn: %d\n", id);
 
-    /* open video device and prepare data structure */
-    bcm_host_init();
-
     vd = fbs[id].videoIn;
-    vd->display = vc_dispmanx_display_open(0);
-    if (!vd->display) {
-        IPRINT("Unable to open primary display");
-        closelog();
-        exit(EXIT_FAILURE);
+    /* open video device and prepare data structure */
+    vd->device = device;
+#ifdef RASPI
+    if (device == DEVICE_RASPI) {
+        bcm_host_init();
+        vd->display = vc_dispmanx_display_open(0);
+        if (!vd->display) {
+            IPRINT("Unable to open primary display");
+            closelog();
+            exit(EXIT_FAILURE);
+        }
+        ret = vc_dispmanx_display_get_info(vd->display, &vd->display_info);
+        if (ret) {
+            IPRINT("Unable to get primary display information");
+            closelog();
+            exit(EXIT_FAILURE);
+        }
+        IPRINT("Primary display is %d x %d\n", vd->display_info.width, vd->display_info.height);
+        vd->width = width;
+        vd->height = height;
+        vd->fps = fps;
+        vd->formatIn = format;
+        vd->screen_resource = vc_dispmanx_resource_create(format, width, height, &vd->image_prt);
+        if (!vd->screen_resource) {
+            IPRINT("Unable to create screen buffer");
+            vc_dispmanx_display_close(vd->display);
+            closelog();
+            exit(EXIT_FAILURE);
+        }
+        vd->framesizeIn = (vd->width * vd->height << 1);
+        switch(vd->formatIn) {
+        case VC_IMAGE_RGB565:
+            vd->bits_per_pixel = 16;
+            vd->framebuffer =
+                (unsigned char *) calloc(1, (size_t) vd->width * (vd->height + 8) * 2);
+            break;
+        case VC_IMAGE_RGB888:
+            vd->bits_per_pixel = 24;
+            vd->framebuffer =
+                (unsigned char *) calloc(1, (size_t) vd->width * (vd->height + 8) * 3);
+            break;
+        case VC_IMAGE_YUV420:
+            vd->bits_per_pixel = 16;
+            vd->framebuffer =
+                (unsigned char *) calloc(1, (size_t) vd->framesizeIn);
+            break;
+        default:
+            fprintf(stderr, " should never arrive exit fatal !!\n");
+            goto error;
+            break;
+        }
+        vc_dispmanx_rect_set(&vd->rect1, 0, 0, width, height);
     }
-    ret = vc_dispmanx_display_get_info(vd->display, &vd->display_info);
-    if (ret) {
-        IPRINT("Unable to get primary display information");
-        closelog();
-        exit(EXIT_FAILURE);
+    else
+#else
+#ifdef X11
+    if (device == DEVICE_XWINDOW) {
+        vd->display = XOpenDisplay(NULL);
+        vd->root = DefaultRootWindow(vd->display);
+        XGetWindowAttributes(vd->display, vd->root, &vd->gwa);
+        vd->width = width;
+        vd->height = height;
+        vd->fps = fps;
+        vd->bits_per_pixel = 32;
+        vd->bytes_per_pixel= 4;
+        vd->fbsize= vd->gwa.width * vd->gwa.height * vd->bytes_per_pixel;
+        vd->framesizeIn = (vd->width * vd->height << 1);
+        vd->framebuffer = (unsigned char *) calloc(1, (size_t) vd->width * vd->height * 3);
     }
-    IPRINT("Primary display is %d x %d\n", vd->display_info.width, vd->display_info.height);
-    vd->width = width;
-    vd->height = height;
-    vd->fps = fps;
-    vd->formatIn = format;
-    vd->screen_resource = vc_dispmanx_resource_create(format, width, height, &vd->image_prt);
-    if (!vd->screen_resource) {
-        IPRINT("Unable to create screen buffer");
-        vc_dispmanx_display_close(vd->display);
-        closelog();
-        exit(EXIT_FAILURE);
+    else
+#endif
+#endif
+    {
+        vd->fbfd = open(device_file, O_RDONLY);
+        printf("device file=%s\n", device_file);
+        if (vd->fbfd < 0) {
+            IPRINT("Unable to open primary display");
+            closelog();
+            exit(EXIT_FAILURE);
+        }
+        ret = ioctl(vd->fbfd, FBIOGET_VSCREENINFO, &vd->display_info);
+        if (ret < 0) {
+            IPRINT("Unable to get primary display information");
+            closelog();
+            exit(EXIT_FAILURE);
+        }
+        IPRINT("Primary display is %d x %d\n", vd->display_info.xres, vd->display_info.yres);
+        vd->width = width;
+        vd->height = height;
+        vd->fps = fps;
+        vd->bits_per_pixel = vd->display_info.bits_per_pixel;
+        vd->bytes_per_pixel=vd->display_info.bits_per_pixel%8==0?vd->display_info.bits_per_pixel/8:(vd->display_info.bits_per_pixel/8)+1;
+        vd->fbsize=vd->display_info.xres * vd->display_info.yres * vd->bytes_per_pixel;
+        vd->framesizeIn = (vd->width * vd->height << 1);
+        vd->buffer = (unsigned char *) malloc((size_t) vd->fbsize);
+        vd->framebuffer = (unsigned char *) calloc(1, (size_t) vd->width * vd->height * 3);
+        init_jpeg(vd);
     }
-    vd->framesizeIn = (vd->width * vd->height << 1);
-    switch(vd->formatIn) {
-    case VC_IMAGE_RGB565:
-        vd->bits_per_pixel = 16;
-        vd->framebuffer =
-            (unsigned char *) calloc(1, (size_t) vd->width * (vd->height + 8) * 2);
-        break;
-    case VC_IMAGE_RGB888:
-        vd->bits_per_pixel = 24;
-        vd->framebuffer =
-            (unsigned char *) calloc(1, (size_t) vd->width * (vd->height + 8) * 3);
-        break;
-    case VC_IMAGE_YUV420:
-        vd->bits_per_pixel = 16;
-        vd->framebuffer =
-            (unsigned char *) calloc(1, (size_t) vd->framesizeIn);
-        break;
-    default:
-        fprintf(stderr, " should never arrive exit fatal !!\n");
-        goto error;
-        break;
-    }
-
-    vc_dispmanx_rect_set(&vd->rect1, 0, 0, width, height);
 
 error:
     return 0;
@@ -357,6 +500,110 @@ void help(void)
     " ---------------------------------------------------------------\n\n");
 }
 
+void grab_frame(struct vdIn *vd)
+{
+#ifdef RASPI
+    if (vd->device == DEVICE_RASPI) {
+        vc_dispmanx_snapshot(vd->display, vd->screen_resource, 0);
+        vc_dispmanx_resource_read_data(vd->screen_resource, &vd->rect1, vd->framebuffer, vd->width * vd->bits_per_pixel / 8);
+    }
+    else
+#else
+#ifdef X11
+    if (vd->device == DEVICE_XWINDOW) {
+        int width = vd->width;
+        int height = vd->height;
+        double stridex, stridey;
+        int x, y;
+        unsigned char *array = vd->framebuffer;
+
+        XImage *image = XGetImage(vd->display, vd->root, 0, 0, vd->gwa.width, vd->gwa.height, AllPlanes, ZPixmap);
+        unsigned long red_mask = image->red_mask;
+        unsigned long green_mask = image->green_mask;
+        unsigned long blue_mask = image->blue_mask;
+        stridex = (double)vd->gwa.width/width;
+        stridey = (double)vd->gwa.height/height;
+
+        for (y = 0; y < height ; y++)
+            for (x = 0; x < width; x++)
+            {
+                unsigned long pixel = XGetPixel(image,(int)(x*stridex),(int)(y*stridey));
+                unsigned char blue = pixel & blue_mask;
+                unsigned char green = (pixel & green_mask) >> 8;
+                unsigned char red = (pixel & red_mask) >> 16;
+
+                array[(x + width * y) * 3] = red;
+                array[(x + width * y) * 3+1] = green;
+                array[(x + width * y) * 3+2] = blue;
+             }
+        XDestroyImage(image);
+    }
+    else
+#endif
+#endif
+    {
+        int width = vd->width;
+        int height = vd->height;
+        uint16_t *fb16, *base16;
+        uint32_t *fb32, *base32;
+        double stridex, stridey;
+        int x, y, bwidth, basey, index;
+        unsigned char *array = vd->framebuffer;
+        int count;
+
+        lseek(vd->fbfd, 0, SEEK_SET);
+        count = read(vd->fbfd, vd->buffer, vd->fbsize);
+        bwidth = vd->display_info.xres;
+        stridex = (double)vd->display_info.xres/width;
+        stridey = (double)vd->display_info.yres/height;
+        //printf("aaa\n");
+        if (vd->bytes_per_pixel == 2) {
+            fb16 = (uint16_t *)vd->buffer;
+            for (y = 0; y < height; y++) {
+                basey = bwidth*(int)(y*stridey);
+                for (x = 0; x < width; x++) {
+                    base16 = fb16 + basey + (int)(x*stridex);
+                    index = y * width + x;
+                    if (bp.red.shift >= 0)
+                        array[index*3]=(*base16&bp.red.mask)>>bp.red.shift;
+                    else
+                        array[index*3]=(*base16&bp.red.mask)<<-bp.red.shift;
+       	            if (bp.green.shift >= 0)
+                        array[index*3+1]=(*base16&bp.green.mask)>>bp.green.shift;
+                    else
+                        array[index*3+1]=(*base16&bp.green.mask)<<-bp.green.shift;
+                    if (bp.blue.shift >= 0)
+                        array[index*3+2]=(*base16&bp.blue.mask)>>bp.blue.shift;
+                    else
+                        array[index*3+2]=(*base16&bp.blue.mask)<<-bp.blue.shift;
+                }
+            }
+        }
+        else if (vd->bytes_per_pixel == 4) {
+            fb32 = (uint32_t *)vd->buffer;
+            for (y = 0; y < height; y++) {
+                basey = bwidth*(int)(y*stridey);
+                for (x = 0; x < width; x++) {
+                    base32 = fb32 + basey + (int)(x*stridex);
+                    index = y * width + x;
+                    if (bp.red.shift >= 0)
+                        array[index*3]=(*base32&bp.red.mask)>>bp.red.shift;
+                    else
+                        array[index*3]=(*base32&bp.red.mask)<<-bp.red.shift;
+    	            if (bp.green.shift >= 0)
+                        array[index*3+1]=(*base32&bp.green.mask)>>bp.green.shift;
+                    else
+                        array[index*3+1]=(*base32&bp.green.mask)<<-bp.green.shift;
+                    if (bp.blue.shift >= 0)
+                        array[index*3+2]=(*base32&bp.blue.mask)>>bp.blue.shift;
+                    else
+                        array[index*3+2]=(*base32&bp.blue.mask)<<-bp.blue.shift;
+                }
+            }
+        }
+    }
+}
+
 /******************************************************************************
 Description.: this thread worker grabs a frame and copies it to the global buffer
 Input Value.: unused
@@ -378,9 +625,7 @@ void *fb_thread(void *arg)
         }
 
         /* grab a frame */
-        vc_dispmanx_snapshot(vd->display, vd->screen_resource, 0);
-        vc_dispmanx_resource_read_data(vd->screen_resource, &vd->rect1, vd->framebuffer, vd->width * vd->bits_per_pixel / 8);
-
+        grab_frame(vd);
         DBG("received frame of size: %d from plugin: %d\n", pcontext->videoIn->buf.bytesused, pcontext->id);
 
         /* copy JPG picture to global buffer */
@@ -392,10 +637,14 @@ void *fb_thread(void *arg)
          * RGB format. Getting JPEGs straight from the fb, is one of the
          * major advantages of Linux compatible devices.
          */
+#ifdef RASPI
         if(vd->formatIn == VC_IMAGE_YUV420) {
             DBG("compressing yuv420 frame from input: %d\n", (int)pcontext->id);
             pglobal->in[pcontext->id].size = compress_yuv420_to_jpeg(vd, pglobal->in[pcontext->id].buf, vd->framesizeIn, gquality);
-        } else {
+        }
+        else
+#endif
+        {
             DBG("compressing rgb frame from input: %d\n", (int)pcontext->id);
             pglobal->in[pcontext->id].size = compress_rgb888_to_jpeg(vd, pglobal->in[pcontext->id].buf, vd->framesizeIn, gquality);
         }
@@ -447,10 +696,23 @@ void fb_cleanup(void *arg)
 
     if(pcontext->videoIn->framebuffer != NULL)
         free(pcontext->videoIn->framebuffer);
-    //if(pcontext->videoIn->screen_resource != NULL)
-    vc_dispmanx_resource_delete(pcontext->videoIn->screen_resource);
-    //if(pcontext->videoIn->display != NULL)
-    vc_dispmanx_display_close(pcontext->videoIn->display);
+#ifdef RASPI
+    if (pcontext->videoIn->device == DEVICE_RASPI) {
+        //if(pcontext->videoIn->screen_resource != NULL)
+        vc_dispmanx_resource_delete(pcontext->videoIn->screen_resource);
+        //if(pcontext->videoIn->display != NULL)
+        vc_dispmanx_display_close(pcontext->videoIn->display);
+    }
+    else
+#else
+    if (pcontext->videoIn->device == DEVICE_XWINDOW)
+        XCloseDisplay(pcontext->videoIn->display);
+    else
+#endif
+    {
+        free (pcontext->videoIn->buffer);
+        close(pcontext->videoIn->fbfd);
+    }
     if(pcontext->videoIn != NULL) free(pcontext->videoIn);
     if(pglobal->in[pcontext->id].buf != NULL)
         free(pglobal->in[pcontext->id].buf);

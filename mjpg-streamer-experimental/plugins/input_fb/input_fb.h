@@ -1,11 +1,12 @@
 /*******************************************************************************
-# RaspberryPi-Framebuffer streaming input-plugin for MJPG-streamer             #
+# Framebuffer streaming input-plugin for MJPG-streamer                         #
 #                                                                              #
-# This package work with the RaspberryPi fb with the mjpeg feature             #
+# This package work with the linux(inc. RaspberryPi) fb with the mjpeg feature #
 #                                                                              #
 # Copyright (C) 2005 2006 Laurent Pinchart &&  Michel Xhaard                   #
 #                    2007 Lucas van Staden                                     #
 #                    2007 Tom Stöveken                                         #
+#                    2016 Seong-Woo Kim                                        #
 #                                                                              #
 # This program is free software; you can redistribute it and/or modify         #
 # it under the terms of the GNU General Public License as published by         #
@@ -23,9 +24,8 @@
 #                                                                              #
 *******************************************************************************/
 
-#ifndef RPIFB_H
-#define RPIFB_H
-
+#ifndef INPUT_FB_H
+#define INPUT_FB_H
 
 #include <stdio.h>
 #include <string.h>
@@ -35,20 +35,19 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/select.h>
+#ifdef RASPI
 #include <bcm_host.h>
+#else
+#ifdef X11
+#include <X11/Xlib.h>
+#include <X11/X.h>
+#endif
+#endif
+#include <linux/fb.h>
 #include "../../mjpg_streamer.h"
 #define NB_BUFFER 4
 
 #define IOCTL_RETRY 4
-
-/* ioctl with a number of retries in the case of I/O failure
-* args:
-* fd - device descriptor
-* IOCTL_X - ioctl reference
-* arg - pointer to ioctl data
-* returns - ioctl result
-*/
-int xioctl(int fd, int IOCTL_X, void *arg);
 
 typedef enum _streaming_state streaming_state;
 enum _streaming_state {
@@ -57,13 +56,34 @@ enum _streaming_state {
     STREAMING_PAUSED = 2,
 };
 
+typedef enum _device_t device_t;
+enum _device_t {
+    DEVICE_XWINDOW,
+    DEVICE_FB,
+    DEVICE_RASPI
+};
+
 struct vdIn {
-    int fd;
+    device_t device;
+#if RASPI
     DISPMANX_DISPLAY_HANDLE_T display;
     DISPMANX_MODEINFO_T display_info;
     DISPMANX_RESOURCE_HANDLE_T screen_resource;
     uint32_t image_prt;
     VC_RECT_T rect1;
+#else
+#ifdef X11
+    Display *display;
+    Window root;
+    XWindowAttributes gwa;
+#endif
+#endif
+    int fbfd;
+    struct fb_var_screeninfo display_info;
+    int bytes_per_pixel;
+    int fbsize;
+    unsigned char *buffer;
+
     unsigned char *framebuffer;
     streaming_state streamingState;
     int width;
