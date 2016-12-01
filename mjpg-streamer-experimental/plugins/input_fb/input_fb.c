@@ -397,7 +397,6 @@ int input_init(input_parameter *param, int id)
         vd->fbsize= vd->gwa.width * vd->gwa.height * vd->bytes_per_pixel;
         vd->framesizeIn = (vd->width * vd->height << 1);
         vd->framebuffer = (unsigned char *) calloc(1, (size_t) vd->width * vd->height * 3);
-        printf("bbb\n");
     }
     else
 #endif
@@ -512,7 +511,6 @@ void grab_frame(struct vdIn *vd)
 #else
 #ifdef X11
     if (vd->device == DEVICE_XWINDOW) {
-        printf("aaa\n");
         int width = vd->width;
         int height = vd->height;
         double stridex, stridey;
@@ -539,7 +537,6 @@ void grab_frame(struct vdIn *vd)
                 array[(x + width * y) * 3+2] = blue;
              }
         XDestroyImage(image);
-        printf("bbb\n");
     }
     else
 #endif
@@ -559,7 +556,6 @@ void grab_frame(struct vdIn *vd)
         bwidth = vd->screen_info.xres;
         stridex = (double)vd->screen_info.xres/width;
         stridey = (double)vd->screen_info.yres/height;
-        //printf("aaa\n");
         if (vd->bytes_per_pixel == 2) {
             fb16 = (uint16_t *)vd->buffer;
             for (y = 0; y < height; y++) {
