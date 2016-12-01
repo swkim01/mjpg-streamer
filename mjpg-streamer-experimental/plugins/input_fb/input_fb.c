@@ -120,7 +120,7 @@ uint64_t fill_bits(uint8_t n)
 
 int init_jpeg(struct vdIn *vd)
 {
-    struct fb_var_screeninfo *sc = &vd->display_info;
+    struct fb_var_screeninfo *sc = &vd->screen_info;
     
     for(bp.red.depth=sc->red.length; bp.red.depth>8; bp.red.depth--)
         ;
@@ -397,6 +397,7 @@ int input_init(input_parameter *param, int id)
         vd->fbsize= vd->gwa.width * vd->gwa.height * vd->bytes_per_pixel;
         vd->framesizeIn = (vd->width * vd->height << 1);
         vd->framebuffer = (unsigned char *) calloc(1, (size_t) vd->width * vd->height * 3);
+        printf("bbb\n");
     }
     else
 #endif
@@ -409,19 +410,19 @@ int input_init(input_parameter *param, int id)
             closelog();
             exit(EXIT_FAILURE);
         }
-        ret = ioctl(vd->fbfd, FBIOGET_VSCREENINFO, &vd->display_info);
+        ret = ioctl(vd->fbfd, FBIOGET_VSCREENINFO, &vd->screen_info);
         if (ret < 0) {
             IPRINT("Unable to get primary display information");
             closelog();
             exit(EXIT_FAILURE);
         }
-        IPRINT("Primary display is %d x %d\n", vd->display_info.xres, vd->display_info.yres);
+        IPRINT("Primary display is %d x %d\n", vd->screen_info.xres, vd->screen_info.yres);
         vd->width = width;
         vd->height = height;
         vd->fps = fps;
-        vd->bits_per_pixel = vd->display_info.bits_per_pixel;
-        vd->bytes_per_pixel=vd->display_info.bits_per_pixel%8==0?vd->display_info.bits_per_pixel/8:(vd->display_info.bits_per_pixel/8)+1;
-        vd->fbsize=vd->display_info.xres * vd->display_info.yres * vd->bytes_per_pixel;
+        vd->bits_per_pixel = vd->screen_info.bits_per_pixel;
+        vd->bytes_per_pixel=vd->screen_info.bits_per_pixel%8==0?vd->screen_info.bits_per_pixel/8:(vd->screen_info.bits_per_pixel/8)+1;
+        vd->fbsize=vd->screen_info.xres * vd->screen_info.yres * vd->bytes_per_pixel;
         vd->framesizeIn = (vd->width * vd->height << 1);
         vd->buffer = (unsigned char *) malloc((size_t) vd->fbsize);
         vd->framebuffer = (unsigned char *) calloc(1, (size_t) vd->width * vd->height * 3);
@@ -511,6 +512,7 @@ void grab_frame(struct vdIn *vd)
 #else
 #ifdef X11
     if (vd->device == DEVICE_XWINDOW) {
+        printf("aaa\n");
         int width = vd->width;
         int height = vd->height;
         double stridex, stridey;
@@ -537,6 +539,7 @@ void grab_frame(struct vdIn *vd)
                 array[(x + width * y) * 3+2] = blue;
              }
         XDestroyImage(image);
+        printf("bbb\n");
     }
     else
 #endif
@@ -553,9 +556,9 @@ void grab_frame(struct vdIn *vd)
 
         lseek(vd->fbfd, 0, SEEK_SET);
         count = read(vd->fbfd, vd->buffer, vd->fbsize);
-        bwidth = vd->display_info.xres;
-        stridex = (double)vd->display_info.xres/width;
-        stridey = (double)vd->display_info.yres/height;
+        bwidth = vd->screen_info.xres;
+        stridex = (double)vd->screen_info.xres/width;
+        stridey = (double)vd->screen_info.yres/height;
         //printf("aaa\n");
         if (vd->bytes_per_pixel == 2) {
             fb16 = (uint16_t *)vd->buffer;

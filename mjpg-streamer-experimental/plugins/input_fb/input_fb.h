@@ -79,7 +79,7 @@ struct vdIn {
 #endif
 #endif
     int fbfd;
-    struct fb_var_screeninfo display_info;
+    struct fb_var_screeninfo screen_info;
     int bytes_per_pixel;
     int fbsize;
     unsigned char *buffer;
