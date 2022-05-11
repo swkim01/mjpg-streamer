@@ -7,7 +7,7 @@ else()
     set(HAS_RASPI OFF)
 endif()
 
-MJPG_STREAMER_PLUGIN_OPTION(input_fb "Framebuffer input plugin")
+MJPG_STREAMER_PLUGIN_OPTION(input_fb "Framebuffer input plugin" ONLYIF X11_FOUND)
 
 if (PLUGIN_INPUT_FB)
     
