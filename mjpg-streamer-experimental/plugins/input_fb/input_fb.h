@@ -104,6 +104,6 @@ typedef struct {
     struct vdIn *videoIn;
 } context;
 
-context fbs[MAX_INPUT_PLUGINS];
+extern context fbs[MAX_INPUT_PLUGINS];
 
 #endif
