@@ -58,6 +58,8 @@
 
 #define INPUT_PLUGIN_NAME "Framebuffer grabber"
 
+context fbs[MAX_INPUT_PLUGINS];
+
 #ifdef RASPI
 static uint8_t effective_bytes_per_pixel;
 static uint64_t fbsize;
