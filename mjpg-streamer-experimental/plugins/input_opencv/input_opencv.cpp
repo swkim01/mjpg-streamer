@@ -405,7 +405,11 @@ void *worker_thread(void *arg)
     
     /* setup imencode options */
     vector<int> compression_params;
+#if CV_VERSION_MAJOR < 4
     compression_params.push_back(CV_IMWRITE_JPEG_QUALITY);
+#else
+    compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
+#endif
     compression_params.push_back(settings->quality); // 1-100
     
     free(settings);
